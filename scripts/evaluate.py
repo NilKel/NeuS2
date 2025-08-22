@@ -49,9 +49,27 @@ def main():
                         scene_name = path_parts[i + 1]
                     break
     
-    # Create output path: dataset/scene/evaluation
+    # Create output path: dataset/scene/config/method_name/evaluation
     if args.output_path == "evaluation_results":
-        args.output_path = os.path.join(dataset_name, scene_name, "evaluation")
+        # Extract config and method from checkpoint path
+        checkpoint_parts = args.checkpoint_path.split('/')
+        config_name = None
+        method_name = None
+        
+        # Look for config and method in checkpoint path
+        for i, part in enumerate(checkpoint_parts):
+            if part in ['baseline', 'surface', 'volume']:
+                config_name = part
+                if i + 1 < len(checkpoint_parts):
+                    method_name = checkpoint_parts[i + 1]
+                break
+        
+        if config_name and method_name:
+            # Create path: dataset/scene/config/method_name/evaluation
+            args.output_path = os.path.join(dataset_name, scene_name, config_name, method_name, "evaluation")
+        else:
+            # Fallback: dataset/scene/evaluation (for backward compatibility)
+            args.output_path = os.path.join(dataset_name, scene_name, "evaluation")
     
     # Create output directory
     os.makedirs(args.output_path, exist_ok=True)
