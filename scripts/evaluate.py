@@ -168,6 +168,19 @@ def main():
             h, w = ref_image.shape[:2]
             rendered_image = testbed.render(w, h, args.spp, True)
             
+            # CRITICAL: Apply background color to GT image to match rendered image
+            # This ensures fair comparison for accurate PSNR/SSIM/LPIPS calculation
+            if ref_image.shape[2] == 4:  # Has alpha channel
+                # Extract alpha channel
+                alpha = ref_image[..., 3:4]
+                
+                # Apply background color to GT image: RGB = RGB * alpha + (1 - alpha) * background
+                background_rgb = np.array(testbed.background_color[:3])
+                ref_image[..., :3] = ref_image[..., :3] * alpha + (1.0 - alpha) * background_rgb
+                
+                # Remove alpha channel after background application
+                ref_image = ref_image[..., :3]
+            
             # Convert to tensor format for metrics
             gt_tensor = torch.from_numpy(ref_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2)
             rendered_tensor = torch.from_numpy(rendered_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2)
@@ -176,17 +189,13 @@ def main():
             if gt_tensor.max() > 1.0:
                 gt_tensor = gt_tensor / 255.0
             
-            # Ensure both GT and rendered images have the same background color for fair comparison
-            # This is crucial for accurate PSNR/SSIM/LPIPS calculation
-            if ref_image.shape[2] == 4:  # Has alpha channel
-                # Apply background color to GT image to match rendered image
-                alpha = ref_image[..., 3:4]
-                ref_image[..., :3] = ref_image[..., :3] * alpha + (1.0 - alpha) * np.array(testbed.background_color[:3])
-                
-                # Update GT tensor with background-applied image
-                gt_tensor = torch.from_numpy(ref_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2)
-                if gt_tensor.max() > 1.0:
-                    gt_tensor = gt_tensor / 255.0
+            # Normalize rendered image to [0, 1] if needed
+            if rendered_tensor.max() > 1.0:
+                rendered_tensor = rendered_tensor / 255.0
+            
+            # Ensure both tensors are in [0, 1] range for accurate metrics
+            gt_tensor = torch.clamp(gt_tensor, 0, 1)
+            rendered_tensor = torch.clamp(rendered_tensor, 0, 1)
             
             # Calculate metrics
             metrics = metrics_calc.calculate_all_metrics(rendered_tensor, gt_tensor)
