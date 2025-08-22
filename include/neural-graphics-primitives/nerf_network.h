@@ -24,6 +24,32 @@
 
 NGP_NAMESPACE_BEGIN
 
+// CUDA kernel function declarations for surface and volume configurations
+template <typename T>
+__global__ void compute_surface_features_kernel(
+    uint32_t batch_size,
+    const T* phi_input,        // 45D Φ input (15x3)
+    const T* normal_vectors,   // 3D normal vectors
+    T* processed_features,     // 16D output (15D surface + 1D SDF)
+    const T* sdf_input        // 1D SDF input
+);
+
+template <typename T>
+__global__ void compute_divergence_features_kernel(
+    uint32_t batch_size,
+    const T* phi_input,        // 45D Φ input (15x3)
+    const T* normal_vectors,   // 3D normal vectors (for reference)
+    T* processed_features,     // 16D output (15D divergence + 1D SDF)
+    const T* sdf_input        // 1D SDF input
+);
+
+template <typename T>
+__global__ void copy_processed_features(
+    uint32_t n_elements,
+    const T* src,
+    T* dst
+);
+
 #define NERF_DEBUG_BACKWARD 0
 #define GEOMETRY_INIT 1
 #define global_delta 1
@@ -227,14 +253,73 @@ public:
 		if (m_configuration == "surface" || m_configuration == "volume") {
 			// The density network now outputs 46D: 1D SDF + 15x3D Spatially-Vectored Potential Φ
 			
+			// Common variables for both configurations
+			uint32_t batch_size = input.n();
+			
+			// Create output tensor for processed features (16D: 15D features + 1D SDF)
+			tcnn::GPUMatrixDynamic<T> processed_features{16, batch_size, stream, forward->density_network_output.layout()};
+			
 			if (m_configuration == "surface") {
 				// Surface: compute surface_feature = -torch.sum(Φ * n.unsqueeze(1), dim=-1)
 				// where n = ∇f (normal) is computed via autograd
 				// Result: 15D surface features + 1D SDF = 16D total
+				
+				// Extract SDF (first dimension) and Φ (remaining 45 dimensions)
+				auto sdf_output = forward->density_network_output.slice_rows(0, 1);  // 1D SDF
+				auto phi_output = forward->density_network_output.slice_rows(1, 46); // 45D Φ (15x3)
+				
+				// Get normal vectors (already computed via autograd) - use reference to avoid copy
+				const auto& normal_vectors = forward->dSDF_dPos; // 3D normal vectors
+				
+				// Compute surface features: surface_feature[i] = -sum(Φ[i,j] * n[j]) for j=0,1,2
+				// Launch CUDA kernel for batch processing
+				compute_surface_features_kernel<T><<<(batch_size + 255) / 256, 256, 0, stream>>>(
+					batch_size,
+					phi_output.data(),           // 45D Φ input (15x3)
+					reinterpret_cast<const T*>(normal_vectors.data()), // 3D normal vectors (cast to T)
+					processed_features.data(),   // 16D output (15D surface + 1D SDF)
+					sdf_output.data()           // 1D SDF input
+				);
+				
+				// Copy processed features to the appropriate location in rgb_network_input
+				// This replaces the old 16D density features with our new 16D processed features
+				auto feature_slice = forward->rgb_network_input.slice_rows(0, 16);
+				tcnn::linear_kernel(copy_processed_features<T>, 0, stream,
+					batch_size * 16,
+					processed_features.data(),
+					feature_slice.data()
+				);
+				
 			} else if (m_configuration == "volume") {
 				// Volume: compute divergence_feature = ∇·Φ for each of the 15 vector fields
 				// ∇·Φ = ∂Φ_x/∂x + ∂Φ_y/∂y + ∂Φ_z/∂z for each of the 15 vectors
 				// Result: 15D divergence features + 1D SDF = 16D total
+				
+				// Extract SDF (first dimension) and Φ (remaining 45 dimensions)
+				auto sdf_output = forward->density_network_output.slice_rows(0, 1);  // 1D SDF
+				auto phi_output = forward->density_network_output.slice_rows(1, 46); // 45D Φ (15x3)
+				
+				// Get normal vectors (already computed via autograd) - use reference to avoid copy
+				const auto& normal_vectors = forward->dSDF_dPos; // 3D normal vectors (for reference)
+				
+				// Compute divergence features: divergence_feature[i] = ∂Φ[i,0]/∂x + ∂Φ[i,1]/∂y + ∂Φ[i,2]/∂z
+				// Launch CUDA kernel for batch processing
+				compute_divergence_features_kernel<T><<<(batch_size + 255) / 256, 256, 0, stream>>>(
+					batch_size,
+					phi_output.data(),           // 45D Φ input (15x3)
+					reinterpret_cast<const T*>(normal_vectors.data()), // 3D normal vectors (cast to T)
+					processed_features.data(),   // 16D output (15D divergence + 1D SDF)
+					sdf_output.data()           // 1D SDF input
+				);
+				
+				// Copy processed features to the appropriate location in rgb_network_input
+				// This replaces the old 16D density features with our new 16D processed features
+				auto feature_slice = forward->rgb_network_input.slice_rows(0, 16);
+				tcnn::linear_kernel(copy_processed_features<T>, 0, stream,
+					batch_size * 16,
+					processed_features.data(),
+					feature_slice.data()
+				);
 			}
 			
 			// All configurations now use 16D feature input to RGB network
@@ -1334,5 +1419,92 @@ private:
 		std::unique_ptr<Context> delta_network_ctx;
 	};
 };
+
+// CUDA kernel implementations for surface and volume configurations
+
+template <typename T>
+__global__ void compute_surface_features_kernel(
+    uint32_t batch_size,
+    const T* phi_input,        // 45D Φ input (15x3)
+    const T* normal_vectors,   // 3D normal vectors
+    T* processed_features,     // 16D output (15D surface + 1D SDF)
+    const T* sdf_input        // 1D SDF input
+) {
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= batch_size) return;
+    
+    // Each thread processes one sample in the batch
+    uint32_t phi_offset = idx * 45;  // 45D Φ per sample
+    uint32_t normal_offset = idx * 3; // 3D normal per sample
+    uint32_t output_offset = idx * 16; // 16D output per sample
+    
+    // Extract SDF (first dimension)
+    processed_features[output_offset + 15] = sdf_input[idx];
+    
+    // Compute surface features: surface_feature[i] = -sum(Φ[i,j] * n[j]) for j=0,1,2
+    for (int i = 0; i < 15; i++) {
+        T surface_feature = 0.0f;
+        for (int j = 0; j < 3; j++) {
+            // Φ[i,j] is at phi_offset + i*3 + j
+            // n[j] is at normal_offset + j
+            T phi_component = phi_input[phi_offset + i * 3 + j];
+            T normal_component = normal_vectors[normal_offset + j];
+            surface_feature += phi_component * normal_component;
+        }
+        // Apply negative sign and store
+        processed_features[output_offset + i] = -surface_feature;
+    }
+}
+
+template <typename T>
+__global__ void compute_divergence_features_kernel(
+    uint32_t batch_size,
+    const T* phi_input,        // 45D Φ input (15x3)
+    const T* normal_vectors,   // 3D normal vectors (for reference)
+    T* processed_features,     // 16D output (15D divergence + 1D SDF)
+    const T* sdf_input        // 1D SDF input
+) {
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= batch_size) return;
+    
+    // Each thread processes one sample in the batch
+    uint32_t phi_offset = idx * 45;  // 45D Φ per sample
+    uint32_t output_offset = idx * 16; // 16D output per sample
+    
+    // Extract SDF (first dimension)
+    processed_features[output_offset + 15] = sdf_input[idx];
+    
+    // Compute divergence features: divergence_feature[i] = ∂Φ[i,0]/∂x + ∂Φ[i,1]/∂y + ∂Φ[i,2]/∂z
+    // Note: For now, we'll use a simplified approach. In a full implementation,
+    // we would need to compute the actual gradients ∂Φ/∂x, ∂Φ/∂y, ∂Φ/∂z
+    // This requires more sophisticated gradient computation that integrates with the autograd system
+    
+    for (int i = 0; i < 15; i++) {
+        // For now, we'll use a placeholder computation
+        // In practice, this should be computed using the actual gradients from autograd
+        T divergence_feature = 0.0f;
+        
+        // Placeholder: simple sum of Φ components (this is NOT the actual divergence)
+        // TODO: Replace with actual gradient computation
+        for (int j = 0; j < 3; j++) {
+            T phi_component = phi_input[phi_offset + i * 3 + j];
+            divergence_feature += phi_component;
+        }
+        
+        processed_features[output_offset + i] = divergence_feature;
+    }
+}
+
+template <typename T>
+__global__ void copy_processed_features(
+    uint32_t n_elements,
+    const T* src,
+    T* dst
+) {
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_elements) return;
+    
+    dst[idx] = src[idx];
+}
 
 NGP_NAMESPACE_END
