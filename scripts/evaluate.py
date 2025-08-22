@@ -158,8 +158,32 @@ def main():
             if gt_tensor.max() > 1.0:
                 gt_tensor = gt_tensor / 255.0
             
+            # Ensure both GT and rendered images have the same background color for fair comparison
+            # This is crucial for accurate PSNR/SSIM/LPIPS calculation
+            if ref_image.shape[2] == 4:  # Has alpha channel
+                # Apply background color to GT image to match rendered image
+                alpha = ref_image[..., 3:4]
+                ref_image[..., :3] = ref_image[..., :3] * alpha + (1.0 - alpha) * np.array(testbed.background_color[:3])
+                
+                # Update GT tensor with background-applied image
+                gt_tensor = torch.from_numpy(ref_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2)
+                if gt_tensor.max() > 1.0:
+                    gt_tensor = gt_tensor / 255.0
+            
             # Calculate metrics
             metrics = metrics_calc.calculate_all_metrics(rendered_tensor, gt_tensor)
+            
+            # Save images for visual inspection
+            images_dir = os.path.join(args.output_path, "images")
+            os.makedirs(images_dir, exist_ok=True)
+            
+            # Save ground truth image
+            gt_filename = os.path.join(images_dir, f"gt_{i:03d}_{os.path.splitext(frame['file_path'])[0]}.png")
+            write_image(gt_filename, ref_image)
+            
+            # Save rendered image
+            rendered_filename = os.path.join(images_dir, f"rendered_{i:03d}_{os.path.splitext(frame['file_path'])[0]}.png")
+            write_image(rendered_filename, rendered_image)
             
             # Store metrics
             frame_metrics = {
