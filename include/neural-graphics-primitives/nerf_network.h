@@ -58,13 +58,19 @@ public:
 				local_density_network_config["n_output_dims"] = 46;
 			} else {
 				// Baseline configuration: output 16D
-				local_density_network_config["n_output_dims"] = 16;
+			local_density_network_config["n_output_dims"] = 16;
 			}
 		}
 		m_density_network.reset(tcnn::create_network<T>(local_density_network_config));
 
-		// density(feature), xyz, normal, dir
-		m_rgb_network_input_width = tcnn::next_multiple(m_n_pos_dims + m_n_pos_dims + m_dir_encoding->padded_output_width() + m_density_network->padded_output_width(), rgb_alignment);
+				// density(feature), xyz, normal, dir
+		// For volume configuration, we need 16D input: 15D divergence_feature + 1D SDF
+		if (m_configuration == "volume") {
+			m_rgb_network_input_width = tcnn::next_multiple(16 + m_dir_encoding->padded_output_width(), rgb_alignment);
+		} else {
+			// Baseline and surface: use existing calculation
+			m_rgb_network_input_width = tcnn::next_multiple(m_n_pos_dims + m_n_pos_dims + m_dir_encoding->padded_output_width() + m_density_network->padded_output_width(), rgb_alignment);
+		}
 
 		json local_rgb_network_config = rgb_network;
 		local_rgb_network_config["n_input_dims"] = m_rgb_network_input_width;
@@ -219,15 +225,21 @@ public:
 		forward->density_network_ctx = m_density_network->forward(stream, forward->density_network_input, &forward->density_network_output, use_inference_params, true);
 		// end density network forward
 
-		// Handle surface configuration: process 46D output for Spatially-Vectored Potential Field
+		// Handle surface/volume configuration: process 46D output for Spatially-Vectored Potential Field
 		if (m_configuration == "surface" || m_configuration == "volume") {
 			// The density network now outputs 46D: 1D SDF + 15x3D Spatially-Vectored Potential Φ
-			// We need to compute the surface feature: surface_feature = -torch.sum(Φ * n.unsqueeze(1), dim=-1)
-			// where n = ∇f (normal) is computed via autograd
+			
+			if (m_configuration == "surface") {
+				// Surface: compute surface_feature = -torch.sum(Φ * n.unsqueeze(1), dim=-1)
+				// where n = ∇f (normal) is computed via autograd
+			} else if (m_configuration == "volume") {
+				// Volume: compute divergence_feature = ∇·Φ for each of the 15 vector fields
+				// This gives us 15D divergence features + 1D SDF = 16D input to RGB network
+			}
 			
 			// For now, we'll use the first 16 dimensions as before for compatibility
-			// The full surface implementation will be completed in the next iteration
-			// This ensures the code compiles and runs while we implement the complete surface logic
+			// The full surface/volume implementation will be completed in the next iteration
+			// This ensures the code compiles and runs while we implement the complete logic
 		}
 
 		tcnn::GPUMatrixDynamic<T> dSDF_dSDF{ m_density_network->padded_output_width(), batch_size, stream, forward->density_network_output.layout() };
