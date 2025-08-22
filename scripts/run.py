@@ -77,12 +77,47 @@ def parse_args():
 if __name__ == "__main__":
 	args = parse_args()
 
-	args.output_path = os.path.join('output',args.name)
+	# Parse dataset path to extract dataset and scene names
+	dataset_path = args.scene if args.scene else ""
+	dataset_name = "unknown"
+	scene_name = "unknown"
+	
+	if dataset_path:
+		# Extract dataset and scene from path like /path/to/nerf_synthetic/lego/transforms_train.json
+		path_parts = dataset_path.split('/')
+		if len(path_parts) >= 2:
+			# Find the dataset name (e.g., nerf_synthetic)
+			for i, part in enumerate(path_parts):
+				if part in ['nerf_synthetic', 'nerf_real', 'mipnerf360', 'tanks_and_temples', 'deepvoxels']:
+					dataset_name = part
+					# Scene name is the next part
+					if i + 1 < len(path_parts):
+						scene_name = path_parts[i + 1]
+					break
+	
+	# Create output path: dataset/scene/config/method_name
+	args.output_path = os.path.join(dataset_name, scene_name, args.configuration, args.name)
 	os.makedirs(os.path.join(args.output_path,"checkpoints"), exist_ok=True)
 	os.makedirs(os.path.join(args.output_path,"mesh"), exist_ok=True)
+	os.makedirs(os.path.join(args.output_path,"logs"), exist_ok=True)
 	
 	time_name = time.strftime("%m_%d_%H_%M", time.localtime())
-	writer = SummaryWriter(log_dir=os.path.join('output',  args.name, 'logs', time_name))
+	writer = SummaryWriter(log_dir=os.path.join(args.output_path, 'logs', time_name))
+	
+	# Initialize training log file
+	training_log_path = os.path.join(args.output_path, "training_log.txt")
+	with open(training_log_path, "w") as f:
+		f.write(f"NeuS2 Training Log\n")
+		f.write(f"="*50 + "\n")
+		f.write(f"Dataset: {dataset_name}\n")
+		f.write(f"Scene: {scene_name}\n")
+		f.write(f"Configuration: {args.configuration}\n")
+		f.write(f"Method: {args.name}\n")
+		f.write(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
+		f.write(f"Output Path: {args.output_path}\n")
+		f.write(f"Network Config: {args.network}\n")
+		f.write(f"Log Interval: {args.log_interval}\n")
+		f.write(f"="*50 + "\n\n")
 
 	mode = ngp.TestbedMode.Nerf 
 	configs_dir = os.path.join(ROOT_DIR, "configs", "nerf")
@@ -219,6 +254,16 @@ if __name__ == "__main__":
 
 		args.save_snapshot = os.path.join(args.output_path,"checkpoints",f"{n_steps}.msgpack")
 		args.save_mesh_path = os.path.join(args.output_path,"mesh",f"{n_steps}.obj")
+		
+		# Log training parameters
+		training_log_path = os.path.join(args.output_path, "training_log.txt")
+		with open(training_log_path, "a") as f:
+			f.write(f"Training Parameters:\n")
+			f.write(f"  Total Steps: {n_steps}\n")
+			f.write(f"  Checkpoint Path: {args.save_snapshot}\n")
+			f.write(f"  Mesh Path: {args.save_mesh_path}\n")
+			f.write(f"  Log Interval: {args.log_interval}\n")
+			f.write(f"\n")
 
 		tqdm_last_update = 0
 		if n_steps > 0:
@@ -297,6 +342,13 @@ if __name__ == "__main__":
 		if args.save_snapshot:
 			print("Saving snapshot ", args.save_snapshot)
 			testbed.save_snapshot(args.save_snapshot, False)
+			
+			# Log completion
+			training_log_path = os.path.join(args.output_path, "training_log.txt")
+			with open(training_log_path, "a") as f:
+				f.write(f"\nTraining completed at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
+				f.write(f"Final checkpoint saved to: {args.save_snapshot}\n")
+				f.write(f"="*50 + "\n")
 
 		
 		res = args.marching_cubes_res or 256

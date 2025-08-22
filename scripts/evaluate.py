@@ -30,8 +30,45 @@ def parse_args():
 def main():
     args = parse_args()
     
+    # Parse dataset path to extract dataset and scene names
+    dataset_path = args.test_json_path
+    dataset_name = "unknown"
+    scene_name = "unknown"
+    
+    if dataset_path:
+        # Extract dataset and scene from path like /path/to/nerf_synthetic/lego/transforms_test.json
+        path_parts = dataset_path.split('/')
+        if len(path_parts) >= 2:
+            # Find the dataset name (e.g., nerf_synthetic)
+            for i, part in enumerate(path_parts):
+                if part in ['nerf_synthetic', 'nerf_real', 'mipnerf360', 'tanks_and_temples', 'deepvoxels']:
+                    dataset_name = part
+                    # Scene name is the next part
+                    if i + 1 < len(path_parts):
+                        scene_name = path_parts[i + 1]
+                    break
+    
+    # Create output path: dataset/scene/evaluation
+    if args.output_path == "evaluation_results":
+        args.output_path = os.path.join(dataset_name, scene_name, "evaluation")
+    
     # Create output directory
     os.makedirs(args.output_path, exist_ok=True)
+    
+    # Initialize evaluation log
+    eval_log_path = os.path.join(args.output_path, "evaluation_log.txt")
+    with open(eval_log_path, "w") as f:
+        f.write(f"NeuS2 Evaluation Log\n")
+        f.write(f"="*50 + "\n")
+        f.write(f"Dataset: {dataset_name}\n")
+        f.write(f"Scene: {scene_name}\n")
+        f.write(f"Checkpoint: {args.checkpoint_path}\n")
+        f.write(f"Test JSON: {args.test_json_path}\n")
+        f.write(f"Background Color: {args.background_color}\n")
+        f.write(f"Samples per Pixel: {args.spp}\n")
+        f.write(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
+        f.write(f"Output Path: {args.output_path}\n")
+        f.write(f"="*50 + "\n\n")
     
     # Initialize testbed
     testbed = ngp.Testbed(ngp.TestbedMode.Nerf)
@@ -149,6 +186,10 @@ def main():
             
             # Print individual results
             print(f"Frame {i} ({frame['file_path']}): PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.3f}, LPIPS={metrics['lpips']:.3f}")
+            
+            # Log to evaluation log
+            with open(eval_log_path, "a") as f:
+                f.write(f"Frame {i} ({frame['file_path']}): PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.3f}, LPIPS={metrics['lpips']:.3f}\n")
     
     # Calculate averages
     num_images = len(all_metrics)
@@ -195,6 +236,20 @@ def main():
             f.write(f"PSNR Range: [{min_psnr:.2f}, {max_psnr:.2f}]\n")
         
         print(f"\nDetailed results saved to: {results_file}")
+        
+        # Log final summary
+        with open(eval_log_path, "a") as f:
+            f.write(f"\nEVALUATION SUMMARY:\n")
+            f.write(f"="*30 + "\n")
+            f.write(f"Total images evaluated: {num_images}\n")
+            f.write(f"Background color: {args.background_color}\n")
+            f.write(f"Samples per pixel: {args.spp}\n")
+            f.write(f"Average PSNR: {avg_psnr:.2f}\n")
+            f.write(f"Average SSIM: {avg_ssim:.3f}\n")
+            f.write(f"Average LPIPS: {avg_lpips:.3f}\n")
+            f.write(f"PSNR Range: [{min_psnr:.2f}, {max_psnr:.2f}]\n")
+            f.write(f"Evaluation completed at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
+            f.write(f"="*30 + "\n")
         
         # Save metrics as JSON for further analysis
         json_file = os.path.join(args.output_path, "evaluation_metrics.json")
