@@ -58,6 +58,7 @@ def parse_args():
 	parser.add_argument("--gui", action="store_true", help="Run the testbed GUI interactively.")
 	parser.add_argument("--train", action="store_true", help="If the GUI is enabled, controls whether training starts immediately.")
 	parser.add_argument("--n_steps", type=int, default=-1, help="Number of steps to train for before quitting.")
+	parser.add_argument("--log_interval", type=int, default=500, help="Interval for logging evaluation metrics during training.")
 
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images.")
 
@@ -232,6 +233,48 @@ if __name__ == "__main__":
 						writer.add_scalar('loss/rgb_loss', testbed.loss, testbed.training_step)
 						writer.add_scalar('loss/ek_loss', testbed.ek_loss, testbed.training_step)
 						writer.add_scalar('loss/mask_loss', testbed.mask_loss, testbed.training_step)
+					
+					# Periodic evaluation during training
+					if testbed.training_step % args.log_interval == 0 and testbed.training_step > 0:
+						# Set model to eval mode for evaluation
+						testbed.shall_train = False
+						
+						# Select a fixed image from training dataset for evaluation
+						eval_image_idx = 0  # Use first training image
+						testbed.set_camera_to_training_view(eval_image_idx)
+						
+						# Get ground truth image dimensions
+						training_data = testbed.nerf.training.dataset
+						if hasattr(training_data, 'images') and len(training_data.images) > 0:
+							gt_image = training_data.images[eval_image_idx]
+							h, w = gt_image.shape[:2]
+							
+							# Render current model output
+							rendered_image = testbed.render(w, h, 8, True)  # 8 samples per pixel
+							
+							# Convert to tensor format for metrics
+							gt_tensor = torch.from_numpy(gt_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2) / 255.0
+							rendered_tensor = torch.from_numpy(rendered_image[..., :3]).float().unsqueeze(0).permute(0, 3, 1, 2)
+							
+							# Calculate metrics
+							from scripts.utils.metrics import MetricsCalculator
+							metrics_calc = MetricsCalculator(device='cuda')
+							metrics = metrics_calc.calculate_all_metrics(rendered_tensor, gt_tensor)
+							
+							# Log to tensorboard
+							writer.add_scalar('eval/psnr', metrics['psnr'], testbed.training_step)
+							writer.add_scalar('eval/ssim', metrics['ssim'], testbed.training_step)
+							writer.add_scalar('eval/lpips', metrics['lpips'], testbed.training_step)
+							
+							# Log to file
+							log_path = os.path.join(args.output_path, f"{args.name}_eval_log.txt")
+							with open(log_path, "a") as f:
+								f.write(f"Iteration {testbed.training_step}: PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.3f}, LPIPS={metrics['lpips']:.3f}\n")
+							
+							print(f"Evaluation at step {testbed.training_step}: PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.3f}, LPIPS={metrics['lpips']:.3f}")
+						
+						# Set model back to train mode
+						testbed.shall_train = True
 
 
 		if args.save_snapshot:
