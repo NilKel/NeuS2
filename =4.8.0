@@ -1,0 +1,2 @@
+Requirement already satisfied: numpy in /home/nilkel/miniconda3/envs/neus/lib/python3.9/site-packages (1.24.3)
+Requirement already satisfied: opencv-python in /home/nilkel/miniconda3/envs/neus/lib/python3.9/site-packages (4.8.1.78)
