@@ -32,6 +32,9 @@ conda activate neus
 # Install PyTorch nightly with CUDA 12.8 support
 pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
+# Install evaluation metrics
+pip install torchmetrics==1.8.1 lpips==0.1.4
+
 # Install other dependencies
 pip install -r requirements.txt
 ```
