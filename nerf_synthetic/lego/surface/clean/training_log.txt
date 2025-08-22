@@ -1,0 +1,22 @@
+NeuS2 Training Log
+==================================================
+Dataset: nerf_synthetic
+Scene: lego
+Configuration: surface
+Method: clean
+Start Time: 2025-08-22 12:34:09
+Output Path: nerf_synthetic/lego/surface/clean
+Network Config: 
+Log Interval: 500
+==================================================
+
+Training Parameters:
+  Total Steps: 20000
+  Checkpoint Path: nerf_synthetic/lego/surface/clean/checkpoints/20000.msgpack
+  Mesh Path: nerf_synthetic/lego/surface/clean/mesh/20000.obj
+  Log Interval: 500
+
+
+Training completed at 2025-08-22 12:37:20
+Final checkpoint saved to: nerf_synthetic/lego/surface/clean/checkpoints/20000.msgpack
+==================================================

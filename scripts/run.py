@@ -59,7 +59,7 @@ def parse_args():
 	parser.add_argument("--train", action="store_true", help="If the GUI is enabled, controls whether training starts immediately.")
 	parser.add_argument("--n_steps", type=int, default=-1, help="Number of steps to train for before quitting.")
 	parser.add_argument("--log_interval", type=int, default=500, help="Interval for logging evaluation metrics during training.")
-	parser.add_argument("--configuration", choices=["baseline", "surface", "volume"], default="baseline", help="Rendering configuration to use")
+	parser.add_argument("--configuration", choices=["baseline", "surface", "volume", "hybrid"], default="baseline", help="Rendering configuration: baseline (original), surface (SDF + surface features), volume (SDF + divergence features), or hybrid (SDF + surface + divergence features)")
 
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images.")
 
@@ -157,11 +157,13 @@ if __name__ == "__main__":
 		print("Surface configuration selected - implementation coming in Task 5")
 		pass
 	elif args.configuration == "volume":
-		# Volume configuration - will be implemented in Task 6
-		print("Volume configuration selected - implementation coming in Task 6")
-		pass
+		print(f"Using VOLUME configuration: 46D SDF output -> 15D divergence features + 1D SDF = 16D RGB input")
+		# Volume configuration logic will be handled in C++/CUDA
+	elif args.configuration == "hybrid":
+		print(f"Using HYBRID configuration: 46D SDF output -> 15D surface features + 15D divergence features + 1D SDF = 31D RGB input")
+		# Hybrid configuration logic will be handled in C++/CUDA
 	else:
-		raise ValueError(f"Unknown configuration: {args.configuration}")
+		print(f"Using BASELINE configuration: 16D SDF output -> 16D RGB input (original NeuS2)")
 
 	if mode == ngp.TestbedMode.Sdf:
 		testbed.tonemap_curve = ngp.TonemapCurve.ACES

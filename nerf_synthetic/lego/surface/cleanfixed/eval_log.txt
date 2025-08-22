@@ -1,0 +1,2 @@
+Evaluating test transforms from  /home/nilkel/Projects/data/nerf_synthetic/lego/transforms_train.json
+camera_view:0, frame_time:0: PSNR=36.29702090305562 SSIM=0.9732800722122192

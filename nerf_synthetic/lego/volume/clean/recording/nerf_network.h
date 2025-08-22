@@ -46,10 +46,9 @@ __global__ void compute_divergence_features_kernel(
 template <typename T>
 __global__ void copy_processed_features(
     uint32_t n_elements,
-    const T* input, T* output
+    const T* src,
+    T* dst
 );
-
-
 
 #define NERF_DEBUG_BACKWARD 0
 #define GEOMETRY_INIT 1
@@ -79,8 +78,8 @@ public:
 		printf("m_density_network_input_width: %d", m_density_network_input_width);
 		local_density_network_config["n_input_dims"] = m_density_network_input_width;
 		if (!density_network.contains("n_output_dims")) {
-			if (m_configuration == "surface" || m_configuration == "volume" || m_configuration == "hybrid") {
-				// Support for surface/volume/hybrid configuration: output 46D instead of 16D
+			if (m_configuration == "surface" || m_configuration == "volume") {
+				// Support for surface/volume configuration: output 46D instead of 16D
 				// 1D for SDF + 15x3D for Spatially-Vectored Potential Φ
 				local_density_network_config["n_output_dims"] = 46;
 			} else {
@@ -95,30 +94,11 @@ public:
 		// Baseline: 16D density features
 		// Surface: 15D surface features (dot product with normals) + 1D SDF = 16D
 		// Volume: 15D divergence features (∇·Φ) + 1D SDF = 16D
-		// Calculate RGB network input width based on configuration
-		int feature_dims;
-		if (m_configuration == "baseline") {
-			feature_dims = 16;  // 16D density features
-		} else if (m_configuration == "surface" || m_configuration == "volume") {
-			feature_dims = 16;  // 15D processed features + 1D SDF = 16D
-		} else if (m_configuration == "hybrid") {
-			feature_dims = 31;  // 15D surface + 15D divergence + 1D SDF = 31D
-		} else {
-			feature_dims = 16;  // Default fallback
-		}
-		
-		m_rgb_network_input_width = tcnn::next_multiple(m_n_pos_dims + m_n_pos_dims + m_dir_encoding->padded_output_width() + feature_dims, rgb_alignment);
+		m_rgb_network_input_width = tcnn::next_multiple(m_n_pos_dims + m_n_pos_dims + m_dir_encoding->padded_output_width() + 16, rgb_alignment);
 
 		json local_rgb_network_config = rgb_network;
 		local_rgb_network_config["n_input_dims"] = m_rgb_network_input_width;
-		
-		// Set output dimensions based on configuration
-		if (m_configuration == "hybrid") {
-			local_rgb_network_config["n_output_dims"] = 31;  // 15D surface + 15D divergence + 1D SDF
-		} else {
-			local_rgb_network_config["n_output_dims"] = 16;  // Default for baseline, surface, volume
-		}
-		
+		local_rgb_network_config["n_output_dims"] = 16;
 		m_rgb_network.reset(tcnn::create_network<T>(local_rgb_network_config));
 
 
@@ -269,8 +249,8 @@ public:
 		forward->density_network_ctx = m_density_network->forward(stream, forward->density_network_input, &forward->density_network_output, use_inference_params, true);
 		// end density network forward
 
-		// Handle surface/volume/hybrid configuration: process 46D output for Spatially-Vectored Potential Field
-		if (m_configuration == "surface" || m_configuration == "volume" || m_configuration == "hybrid") {
+		// Handle surface/volume configuration: process 46D output for Spatially-Vectored Potential Field
+		if (m_configuration == "surface" || m_configuration == "volume") {
 			// The density network now outputs 46D: 1D SDF + 15x3D Spatially-Vectored Potential Φ
 			
 			// Common variables for both configurations
@@ -340,57 +320,10 @@ public:
 					processed_features.data(),
 					feature_slice.data()
 				);
-			} else if (m_configuration == "hybrid") {
-				// HYBRID: 46D -> 15D surface + 15D divergence + 1D SDF = 31D
-				// Extract SDF (first dimension) and Φ (remaining 45 dimensions)
-				auto sdf_output = forward->density_network_output.slice_rows(0, 1);  // 1D SDF
-				auto phi_output = forward->density_network_output.slice_rows(1, 46); // 45D Φ (15x3)
-				
-				// Get normal vectors (already computed via autograd) - use reference to avoid copy
-				const auto& normal_vectors = forward->dSDF_dPos; // 3D normal vectors (for reference)
-				
-				// Create temporary storage for hybrid features (31D)
-				// We need to create a larger processed_features matrix for hybrid
-				auto hybrid_features = tcnn::GPUMatrixDynamic<T>{31, batch_size, stream, tcnn::AoS};
-				
-				// For hybrid, we need to compute both surface and divergence features
-				// First, compute surface features in the first 15 positions
-				auto surface_slice = hybrid_features.slice_rows(0, 15);
-				compute_surface_features_kernel<T><<<(batch_size + 255) / 256, 256, 0, stream>>>(
-					batch_size,
-					phi_output.data(),           // 45D Φ input (15x3)
-					reinterpret_cast<const T*>(normal_vectors.data()), // 3D normal vectors (cast to T)
-					surface_slice.data(),        // 15D surface features
-					sdf_output.data()           // 1D SDF input (not used for surface slice)
-				);
-				
-				// Then compute divergence features in positions 15-29
-				auto divergence_slice = hybrid_features.slice_rows(15, 30);
-				compute_divergence_features_kernel<T><<<(batch_size + 255) / 256, 256, 0, stream>>>(
-					batch_size,
-					phi_output.data(),           // 45D Φ input (15x3)
-					reinterpret_cast<const T*>(normal_vectors.data()), // 3D normal vectors (cast to T)
-					divergence_slice.data(),     // 15D divergence features
-					sdf_output.data()           // 1D SDF input (not used for divergence slice)
-				);
-				
-				// Finally, copy SDF to position 30
-				auto sdf_slice = hybrid_features.slice_rows(30, 31);
-				tcnn::linear_kernel(copy_processed_features<T>, 0, stream,
-					batch_size * 1,
-					sdf_output.data(),
-					sdf_slice.data()
-				);
-				
-				// Copy hybrid features to the appropriate location in rgb_network_input
-				// This replaces the old 16D density features with our new 31D hybrid features
-				auto feature_slice = forward->rgb_network_input.slice_rows(0, 31);
-				tcnn::linear_kernel(copy_processed_features<T>, 0, stream,
-					batch_size * 31,
-					hybrid_features.data(),
-					feature_slice.data()
-				);
 			}
+			
+			// All configurations now use 16D feature input to RGB network
+			// This ensures consistent architecture across all modes
 		}
 
 		tcnn::GPUMatrixDynamic<T> dSDF_dSDF{ m_density_network->padded_output_width(), batch_size, stream, forward->density_network_output.layout() };
@@ -1565,14 +1498,13 @@ __global__ void compute_divergence_features_kernel(
 template <typename T>
 __global__ void copy_processed_features(
     uint32_t n_elements,
-    const T* input, T* output
+    const T* src,
+    T* dst
 ) {
     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_elements) return;
     
-    output[idx] = input[idx];
+    dst[idx] = src[idx];
 }
-
-
 
 NGP_NAMESPACE_END
