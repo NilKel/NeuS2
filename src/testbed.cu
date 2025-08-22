@@ -2206,6 +2206,10 @@ void Testbed::reset_network() {
 
 		uint32_t n_dir_dims = 3;
 		uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
+		
+		// Get configuration from config file, default to "baseline"
+		std::string configuration = config.value("configuration", "baseline");
+		
 		m_network = m_nerf_network = std::make_shared<NerfNetwork<precision_t>>(
 			dims.n_pos,
 			n_dir_dims,
@@ -2214,7 +2218,8 @@ void Testbed::reset_network() {
 			encoding_config,
 			dir_encoding_config,
 			network_config,
-			rgb_network_config
+			rgb_network_config,
+			configuration
 		);
 
 		m_nerf_network->set_anneal_end(m_anneal_end);

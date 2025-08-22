@@ -1,4 +1,5 @@
 {
+	"configuration": "baseline",
 	"loss": {
 		"otype": "Huber"
 	},
@@ -13,7 +14,7 @@
 			"nested": {
 				"otype": "Adam",
 				"learning_rate": 1e-3,
-				"after_learning_rate": 1e-3, // next frame learning rate
+				"after_learning_rate": 1e-3,
 				"beta1": 0.9,
 				"beta2": 0.99,
 				"epsilon": 1e-15,
