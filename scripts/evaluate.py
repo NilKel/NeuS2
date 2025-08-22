@@ -195,12 +195,16 @@ def main():
             images_dir = os.path.join(args.output_path, "images")
             os.makedirs(images_dir, exist_ok=True)
             
+            # Sanitize filename - remove path separators and invalid characters
+            safe_filename = os.path.basename(frame['file_path']).replace('/', '_').replace('\\', '_')
+            safe_filename = os.path.splitext(safe_filename)[0]  # Remove extension
+            
             # Save ground truth image
-            gt_filename = os.path.join(images_dir, f"gt_{i:03d}_{os.path.splitext(frame['file_path'])[0]}.png")
+            gt_filename = os.path.join(images_dir, f"gt_{i:03d}_{safe_filename}.png")
             write_image(gt_filename, ref_image)
             
             # Save rendered image
-            rendered_filename = os.path.join(images_dir, f"rendered_{i:03d}_{os.path.splitext(frame['file_path'])[0]}.png")
+            rendered_filename = os.path.join(images_dir, f"rendered_{i:03d}_{safe_filename}.png")
             write_image(rendered_filename, rendered_image)
             
             # Store metrics
