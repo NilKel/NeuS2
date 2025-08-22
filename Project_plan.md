@@ -4,26 +4,28 @@ Of course. Here is the complete set of instructions, structured as a markdown fi
 
 # Instructions for Augmenting the NeuS2 Codebase
 
-## 🎯 **PROJECT STATUS: ALL TASKS COMPLETED!** ✅
+## 🎯 **PROJECT STATUS: HYBRID CONFIGURATION COMPLETED!** ✅
 
-All 6 tasks have been successfully implemented and committed to the `baseline` branch. The NeuS2 codebase now supports:
+All 7 tasks have been successfully implemented and committed to the `baseline` branch. The NeuS2 codebase now supports:
 
 - **Task 1**: SSIM and LPIPS evaluation metrics ✅
 - **Task 2**: In-training evaluation and logging ✅  
 - **Task 3**: Comprehensive testing script ✅
-- **Task 4**: Configuration system (baseline/surface/volume) ✅
+- **Task 4**: Configuration system (baseline/surface/volume/hybrid) ✅
 - **Task 5**: Surface configuration foundation (46D SDF output + actual computation) ✅
 - **Task 6**: Volume configuration foundation (divergence features + actual computation) ✅
+- **Task 7**: Hybrid configuration (surface + divergence features combined) ✅
 
 The code compiles successfully and is ready for the next phase of development.
 
 **🎯 RGB MLP Input Shape Clarification:**
-All configurations now use a consistent **16D feature input** to the RGB MLP:
+All configurations now use consistent feature input to the RGB MLP:
 - **Baseline**: 16D density features from SDF network
 - **Surface**: 15D surface features (dot product with normals) + 1D SDF = 16D total
 - **Volume**: 15D divergence features (∇·Φ) + 1D SDF = 16D total
+- **Hybrid**: 15D surface features + 15D divergence features + 1D SDF = 31D total
 
-The complete RGB MLP input structure is: `[3D position] + [3D position] + [dir_encoding_features] + [16D processed_features]`
+The complete RGB MLP input structure is: `[3D position] + [3D position] + [dir_encoding_features] + [processed_features]`
 
 Your task is to modify the existing NeuS2 codebase to support a new, physically-inspired rendering method based on a "Spatially-Vectored Potential Field." You will implement these changes sequentially, ensuring the codebase remains stable at each step.
 
@@ -142,3 +144,31 @@ Your task is to modify the existing NeuS2 codebase to support a new, physically-
     *   **D. Adapt Radiance Network Input:** ✅
         *   ~~You must modify the first linear layer of the existing `RadianceNet` to accept an input of `31` dimensions~~ **CORRECTED:** Volume uses 16D input (15D divergence + 1D SDF), so no MLP architecture change required.
     *   **E. Predict Color:** Pass this `16D` `radiance_net_input` to the existing `RadianceNet` to get the per-sample color `c_i`.
+
+---
+
+### Task 7: Implement the "Hybrid" Configuration ✅
+
+**Goal:** Implement the combined rendering logic that uses both surface and divergence features for the `hybrid` mode.
+
+1.  **Implement the `hybrid` Rendering Path:** ✅
+    *   Inside your renderer's `if args.configuration == 'hybrid':` block:
+    *   **A. Split, Reshape, and Compute Normal:** Same as steps A and B from the `surface` config.
+    *   **B. Compute Both Feature Types:** ✅
+        *   Compute the `15D` `surface_feature` as in the `surface` config.
+        *   Compute the `15D` `divergence_feature` as in the `volume` config.
+    *   **C. Concatenate Features:** ✅
+        *   Create a `31D` feature vector: `radiance_net_input = torch.cat([surface_feature, divergence_feature, f.unsqueeze(-1)], dim=-1)`.
+        *   Use proper padding with `tcnn::next_multiple(31, rgb_alignment)` to respect tiny-cuda-nn dimensionality requirements.
+    *   **D. Adapt Radiance Network:** ✅
+        *   Modify the RGB network to accept `31D` input and output `31D` features.
+        *   The network architecture automatically adjusts based on the configuration.
+    *   **E. Predict Color:** Pass this `31D` `radiance_net_input` to the modified `RadianceNet` to get the per-sample color `c_i`.
+
+**🎯 Key Implementation Details:**
+- **Density Network**: Outputs 46D (1D SDF + 15×3D potential field Φ)
+- **Feature Processing**: 
+  - Surface features: `surface_feature[i] = -sum(Φ[i,j] * n[j])` for j=0,1,2
+  - Divergence features: `divergence_feature[i] = ∇·Φ[i]` (placeholder implementation)
+- **RGB Network**: 31D input → 31D output with proper tiny-cuda-nn alignment
+- **Memory Layout**: `[15D surface] + [15D divergence] + [1D SDF] = 31D total`
