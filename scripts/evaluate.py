@@ -101,6 +101,23 @@ def main():
     with open(args.test_json_path, 'r') as f:
         test_transforms = json.load(f)
     
+    # CRITICAL: Set the camera field of view from the dataset
+    # This matches exactly what the training script does
+    if "camera_angle_x" in test_transforms:
+        camera_angle_rad = test_transforms["camera_angle_x"]
+        camera_angle_deg = camera_angle_rad * 180 / np.pi
+        print(f"Dataset camera_angle_x: {camera_angle_rad:.6f} rad = {camera_angle_deg:.2f} degrees")
+        
+        # Set FOV in the testbed to match the dataset
+        if hasattr(testbed, 'fov'):
+            testbed.fov = camera_angle_deg
+            print(f"Set testbed.fov = {testbed.fov}")
+        elif hasattr(testbed, 'nerf') and hasattr(testbed.nerf, 'fov'):
+            testbed.nerf.fov = camera_angle_deg
+            print(f"Set testbed.nerf.fov = {testbed.nerf.fov}")
+    else:
+        print("Warning: No camera_angle_x found in dataset, using default FOV")
+    
     # Set background color
     if args.background_color == "white":
         testbed.background_color = [1.0, 1.0, 1.0, 1.0]
@@ -170,27 +187,31 @@ def main():
             # This gives us the camera position and orientation
             camera_to_world = transform_matrix[:3, :4]
             
-            # Debug: Print camera parameters for first few frames
-            if i < 3:  # Only print for first 3 frames to avoid spam
-                print(f"Frame {i}: Camera matrix shape: {camera_to_world.shape}")
-                print(f"Frame {i}: Camera position: {camera_to_world[:3, 3]}")
-                print(f"Frame {i}: Image dimensions: {w}x{h}")
-            
             # Set the camera matrix in the testbed
             testbed.set_nerf_camera_matrix(camera_to_world)
             
             # IMPORTANT: Set the camera field of view to match the dataset
             # NeRF synthetic datasets typically use 60 degrees FOV
             # This ensures the rendered image matches the GT image scale
-            if hasattr(testbed, 'fov'):
-                testbed.fov = 60.0  # Set to 60 degrees to match NeRF synthetic
-                if i < 3: print(f"Frame {i}: Set testbed.fov = {testbed.fov}")
-            elif hasattr(testbed, 'nerf') and hasattr(testbed.nerf, 'fov'):
-                testbed.nerf.fov = 60.0
-                if i < 3: print(f"Frame {i}: Set testbed.nerf.fov = {testbed.nerf.fov}")
+            # The FOV is now set from the dataset, so this block is no longer needed
+            # if hasattr(testbed, 'fov'):
+            #     testbed.fov = 60.0  # Set to 60 degrees to match NeRF synthetic
+            # elif hasattr(testbed, 'nerf') and hasattr(testbed.nerf, 'fov'):
+            #     testbed.nerf.fov = 60.0
             
             # Render image with the same dimensions as GT
             h, w = ref_image.shape[:2]
+            
+            # Debug: Print camera parameters for first few frames
+            if i < 3:  # Only print for first 3 frames to avoid spam
+                print(f"Frame {i}: Camera matrix shape: {camera_to_world.shape}")
+                print(f"Frame {i}: Camera position: {camera_to_world[:3, 3]}")
+                print(f"Frame {i}: Image dimensions: {w}x{h}")
+                if hasattr(testbed, 'fov'):
+                    print(f"Frame {i}: Set testbed.fov = {testbed.fov}")
+                elif hasattr(testbed, 'nerf') and hasattr(testbed.nerf, 'fov'):
+                    print(f"Frame {i}: Set testbed.nerf.fov = {testbed.nerf.fov}")
+            
             rendered_image = testbed.render(w, h, args.spp, True)
             
             # CRITICAL: Apply background color to GT image to match rendered image
