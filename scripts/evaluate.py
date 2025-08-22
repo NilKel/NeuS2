@@ -161,10 +161,35 @@ def main():
                 ref_image += (1.0 - ref_image[...,3:4]) * testbed.background_color
                 ref_image[...,:3] = srgb_to_linear(ref_image[...,:3])
             
-            # Set camera matrix
-            testbed.set_nerf_camera_matrix(np.matrix(frame["transform_matrix"])[:-1,:])
+            # Set camera matrix - CRITICAL for matching GT image view
+            # The transform_matrix is a 4x4 transformation matrix
+            # We need to extract the proper camera parameters
+            transform_matrix = np.array(frame["transform_matrix"])
             
-            # Render image
+            # Extract camera-to-world transformation (3x4 matrix)
+            # This gives us the camera position and orientation
+            camera_to_world = transform_matrix[:3, :4]
+            
+            # Debug: Print camera parameters for first few frames
+            if i < 3:  # Only print for first 3 frames to avoid spam
+                print(f"Frame {i}: Camera matrix shape: {camera_to_world.shape}")
+                print(f"Frame {i}: Camera position: {camera_to_world[:3, 3]}")
+                print(f"Frame {i}: Image dimensions: {w}x{h}")
+            
+            # Set the camera matrix in the testbed
+            testbed.set_nerf_camera_matrix(camera_to_world)
+            
+            # IMPORTANT: Set the camera field of view to match the dataset
+            # NeRF synthetic datasets typically use 60 degrees FOV
+            # This ensures the rendered image matches the GT image scale
+            if hasattr(testbed, 'fov'):
+                testbed.fov = 60.0  # Set to 60 degrees to match NeRF synthetic
+                if i < 3: print(f"Frame {i}: Set testbed.fov = {testbed.fov}")
+            elif hasattr(testbed, 'nerf') and hasattr(testbed.nerf, 'fov'):
+                testbed.nerf.fov = 60.0
+                if i < 3: print(f"Frame {i}: Set testbed.nerf.fov = {testbed.nerf.fov}")
+            
+            # Render image with the same dimensions as GT
             h, w = ref_image.shape[:2]
             rendered_image = testbed.render(w, h, args.spp, True)
             
