@@ -4,9 +4,9 @@ Of course. Here is the complete set of instructions, structured as a markdown fi
 
 # Instructions for Augmenting the NeuS2 Codebase
 
-## 🎯 **PROJECT STATUS: HYBRID CONFIGURATION COMPLETED!** ✅
+## 🎯 **PROJECT STATUS: ADAPTIVE EIKONAL REGULARIZATION COMPLETED!** ✅
 
-All 7 tasks have been successfully implemented and committed to the `baseline` branch. The NeuS2 codebase now supports:
+All 8 tasks have been successfully implemented and committed to the `baseline` branch. The NeuS2 codebase now supports:
 
 - **Task 1**: SSIM and LPIPS evaluation metrics ✅
 - **Task 2**: In-training evaluation and logging ✅  
@@ -15,9 +15,9 @@ All 7 tasks have been successfully implemented and committed to the `baseline` b
 - **Task 5**: Surface configuration foundation (46D SDF output + actual computation) ✅
 - **Task 6**: Volume configuration foundation (divergence features + actual computation) ✅
 - **Task 7**: Hybrid configuration (surface + divergence features combined) ✅
+- **Task 8**: Adaptive Eikonal regularization from HiNeuS ✅
 
 The code compiles successfully and is ready for the next phase of development.
-
 **🎯 RGB MLP Input Shape Clarification:**
 All configurations now use consistent feature input to the RGB MLP:
 - **Baseline**: 16D density features from SDF network
@@ -27,6 +27,14 @@ All configurations now use consistent feature input to the RGB MLP:
 
 The complete RGB MLP input structure is: `[3D position] + [3D position] + [dir_encoding_features] + [processed_features]`
 
+**🎯 Adaptive Eikonal Regularization (HiNeuS):**
+The codebase now supports configurable Eikonal loss modes:
+- **Baseline Mode**: Standard uniform Eikonal loss `L_eikonal = E_x[(||∇f(x)|| - 1)²]`
+- **Relaxed Mode**: HiNeuS adaptive Eikonal regularization `L_eikonal = E_x[w(x) * (||∇f(x)|| - 1)²]`
+  - Adaptive weight: `w(x) = exp(-γ * ||C(x) - C_gt(x)||²)` where γ = 5.0
+  - Low rendering error regions: Strong Eikonal constraint (smooth surfaces)
+  - High rendering error regions: Weak Eikonal constraint (preserve details)
+  - Error clipping: `error_clip_value = 0.2` prevents extreme weights
 Your task is to modify the existing NeuS2 codebase to support a new, physically-inspired rendering method based on a "Spatially-Vectored Potential Field." You will implement these changes sequentially, ensuring the codebase remains stable at each step.
 
 **General Guidelines:**
@@ -172,3 +180,42 @@ Your task is to modify the existing NeuS2 codebase to support a new, physically-
   - Divergence features: `divergence_feature[i] = ∇·Φ[i]` (placeholder implementation)
 - **RGB Network**: 31D input → 31D output with proper tiny-cuda-nn alignment
 - **Memory Layout**: `[15D surface] + [15D divergence] + [1D SDF] = 31D total`
+
+---
+
+### Task 8: Implement Adaptive Eikonal Regularization from HiNeuS ✅
+
+**Goal:** Upgrade the geometric regularization by implementing the "Rendering-Prioritized Eikonal Relaxation" method from the HiNeuS paper.
+
+1.  **Add Command-Line Argument:** ✅
+    *   Added `--eikonal_mode` argument with choices `['baseline', 'relaxed']` to `scripts/run.py`.
+    *   Default value is `'baseline'` for backward compatibility.
+
+2.  **Extend Testbed Class:** ✅
+    *   Added `eikonal_mode` field and setter/getter methods to the `Testbed` class.
+    *   Integrated with the existing configuration system.
+
+3.  **Implement Adaptive Eikonal Loss:** ✅
+    *   Modified the CUDA kernel `compute_loss_kernel_train_nerf_with_global_movement` to support adaptive weighting.
+    *   **Baseline Mode**: Standard uniform Eikonal loss `L_eikonal = E_x[(||∇f(x)|| - 1)²]`.
+    *   **Relaxed Mode**: HiNeuS adaptive Eikonal regularization `L_eikonal = E_x[w(x) * (||∇f(x)|| - 1)²]`.
+    *   Adaptive weight calculation: `w(x) = exp(-γ * ||C(x) - C_gt(x)||²)` where γ = 5.0.
+    *   Error clipping: `error_clip_value = 0.2` prevents extreme weights.
+
+4.  **Update Kernel Interface:** ✅
+    *   Extended kernel signature with `eikonal_mode` and `ground_truth_colors` parameters.
+    *   Updated kernel call site to pass the new parameters.
+    *   Added conditional logic for adaptive vs. baseline Eikonal loss computation.
+
+5.  **User Experience Enhancements:** ✅
+    *   Added informative output about Eikonal loss modes during training.
+    *   Integrated eikonal mode into training logs and configuration display.
+    *   Clear explanation of the adaptive behavior: strong constraint for simple regions, weak constraint for complex regions.
+
+**🎯 Key Implementation Details:**
+- **Hyperparameters**: γ = 5.0, error_clip_value = 0.2 (as used in HiNeuS paper)
+- **Adaptive Behavior**: 
+  - Low rendering error → Strong Eikonal constraint → Smooth surfaces
+  - High rendering error → Weak Eikonal constraint → Preserve geometric details
+- **Gradient Flow**: Weights are detached to prevent gradients from flowing through rendering error into appearance networks
+- **Memory Layout**: Ground truth colors passed as `float*` array with 3 values per ray (RGB)
