@@ -62,8 +62,8 @@ def parse_args():
 	parser.add_argument("--configuration", choices=["baseline", "surface", "volume", "hybrid"], default="baseline", help="Rendering configuration: baseline (original), surface (SDF + surface features), volume (SDF + divergence features), or hybrid (SDF + surface + divergence features)")
 
 	# Loss configuration
-	parser.add_argument("--loss_mode", choices=["baseline", "surface"], default="baseline", help="Loss computation mode: baseline volumetric loss or surface-weighted loss")
-	parser.add_argument("--occupancy_warmup_steps", type=int, default=1000, help="Number of warm-up steps for occupancy alpha clamping in surface mode")
+	parser.add_argument("--loss_mode", choices=["baseline", "surface", "hybrid"], default="baseline", help="Loss computation mode: baseline volumetric loss, surface-weighted loss, or hybrid")
+	parser.add_argument("--occupancy_warmup_steps", type=int, default=1000, help="Number of warm-up steps for occupancy alpha clamping in surface/surface-head modes")
 
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images.")
 
