@@ -1502,6 +1502,11 @@ private:
 		// Dual-head per-head feature inputs (16 x N)
 		tcnn::GPUMatrixDynamic<T> surface_head_input;
 		tcnn::GPUMatrixDynamic<T> volume_head_input;
+		// Dual-head RGB outputs for per-head loss computation
+		tcnn::GPUMatrixDynamic<T> surface_rgb_output;
+		tcnn::GPUMatrixDynamic<T> volume_rgb_output;
+		std::unique_ptr<Context> rgb_surface_ctx;
+		std::unique_ptr<Context> rgb_volume_ctx;
 	};
 };
 

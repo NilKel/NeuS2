@@ -1522,9 +1522,9 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 	const float ek_loss_weight,
 	const float cos_anneal_ratio,
 	bool surface_mode,
-	uint32_t occupancy_warmup_steps
-) {
-	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
+	uint32_t occupancy_warmup_steps,
+	int loss_mode
+) {	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
 	if (i >= *rays_counter) { return; }
 
 	// grab the number of samples for this ray, and the first sample
@@ -1855,6 +1855,26 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 		if (surface_mode && loss_output && j == compacted_numsteps - 1) {
 			float out_loss = surface_weighted_l1_accum / fmaxf(1.0f, (float)compacted_numsteps);
 			loss_output[i] = out_loss / (float)n_rays;
+		}
+
+		// Dual-head loss computation for different loss modes
+		if (loss_mode == 3 && loss_output && j == compacted_numsteps - 1) { // 3 = dual mode
+			// In dual mode, compute losses per head based on the loss_mode
+			if (loss_mode == 0) { // 0 = baseline
+				// Both heads use standard composited L1 loss
+				loss_output[i] = mean_loss / (float)n_rays;
+			} else if (loss_mode == 1) { // 1 = surface
+				// Both heads use alpha-weighted local L1 loss
+				float surface_head_loss = surface_weighted_l1_accum / fmaxf(1.0f, (float)compacted_numsteps);
+				// For now, use same loss for volume head (TODO: compute actual volume head local L1)
+				float volume_head_loss = surface_head_loss;
+				loss_output[i] = (surface_head_loss + volume_head_loss) / (float)n_rays;
+			} else if (loss_mode == 2) { // 2 = hybrid
+				// Surface head: alpha-weighted local L1, Volume head: standard composited L1
+				float surface_head_loss = surface_weighted_l1_accum / fmaxf(1.0f, (float)compacted_numsteps);
+				float volume_head_loss = mean_loss;
+				loss_output[i] = (surface_head_loss + volume_head_loss) / (float)n_rays;
+			}
 		}
 
 		float dloss_dalpha;
@@ -2436,7 +2456,7 @@ __global__ void safe_divide(const uint32_t num_elements, float* __restrict__ ino
 
 
 void Testbed::NerfTracer::init_rays_from_camera(
-	uint32_t sample_index,
+	uint32_t spp,
 	uint32_t padded_output_width,
 	uint32_t n_extra_dims,
 	const Vector2i& resolution,
@@ -2473,7 +2493,7 @@ void Testbed::NerfTracer::init_rays_from_camera(
 	const dim3 threads = { 16, 8, 1 };
 	const dim3 blocks = { div_round_up((uint32_t)resolution.x(), threads.x), div_round_up((uint32_t)resolution.y(), threads.y), 1 };
 	init_rays_with_payload_kernel_nerf<<<blocks, threads, 0, stream>>>(
-		sample_index,
+		spp,
 		m_rays[0].payload,
 		resolution,
 		focal_length,
@@ -2509,7 +2529,7 @@ void Testbed::NerfTracer::init_rays_from_camera(
 		render_aabb,
 		camera_matrix1.col(2),
 		focal_length,
-		sample_index,
+		spp,
 		m_rays[0].payload,
 		grid,
 		(show_accel >= 0) ? show_accel : 0,
@@ -3943,8 +3963,11 @@ void Testbed::train_nerf_step(uint32_t target_batch_size, uint32_t n_rays_per_ba
 		m_ek_loss_weight,
 		m_nerf_network->cos_anneal_ratio(),
 	(m_loss_mode == std::string("surface")),
-	m_occupancy_warmup_steps
-	);
+	m_occupancy_warmup_steps,
+	(m_loss_mode == std::string("baseline") ? 0 : 
+	 m_loss_mode == std::string("surface") ? 1 : 
+	 m_loss_mode == std::string("hybrid") ? 2 : 
+	 m_loss_mode == std::string("dual") ? 3 : 0)	);
 
 
 	fill_rollover_and_rescale<network_precision_t><<<n_blocks_linear(target_batch_size*padded_output_width), n_threads_linear, 0, stream>>>(
@@ -4270,5 +4293,7 @@ int Testbed::find_best_training_view(int default_view) {
 	}
 	return bestimage;
 }
+
+// CUDA kernel to combine two RGB head outputs
 
 NGP_NAMESPACE_END
