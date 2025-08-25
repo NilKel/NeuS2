@@ -66,7 +66,8 @@ public:
 	const std::string& loss_mode() const { return m_loss_mode; }
 	void set_occupancy_warmup_steps(uint32_t steps) { m_occupancy_warmup_steps = steps; }
 	uint32_t occupancy_warmup_steps() const { return m_occupancy_warmup_steps; }
-
+	void set_eikonal_mode(const std::string& mode) { m_eikonal_mode = mode; }
+	const std::string& eikonal_mode() const { return m_eikonal_mode; }
 	using distance_fun_t = std::function<void(uint32_t, const tcnn::GPUMemory<Eigen::Vector3f>&, tcnn::GPUMemory<float>&, cudaStream_t)>;
 	using normals_fun_t = std::function<void(uint32_t, const tcnn::GPUMemory<Eigen::Vector3f>&, tcnn::GPUMemory<Eigen::Vector3f>&, cudaStream_t)>;
 
@@ -938,6 +939,6 @@ public:
 	// Loss configuration (default baseline)
 	std::string m_loss_mode = "baseline";
 	uint32_t m_occupancy_warmup_steps = 1000;
+	std::string m_eikonal_mode = "baseline";
 };
-
 NGP_NAMESPACE_END

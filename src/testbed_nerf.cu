@@ -1523,10 +1523,12 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 	const float cos_anneal_ratio,
 	bool surface_mode,
 	uint32_t occupancy_warmup_steps,
-	int loss_mode
-) {	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
+	int loss_mode,
+	int eikonal_mode,
+	const float* __restrict__ ground_truth_colors
+) {
+	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
 	if (i >= *rays_counter) { return; }
-
 	// grab the number of samples for this ray, and the first sample
 	uint32_t numsteps = numsteps_in[i*2+0];
 	uint32_t base = numsteps_in[i*2+1];
@@ -1965,12 +1967,35 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 
 		bool inside_ek_aabb = ek_aabb.contains(pos);
 	
+		// Compute adaptive Eikonal loss based on mode
+		float eikonal_weight = ek_loss_weight;
+		if (eikonal_mode == 1 && ground_truth_colors != nullptr) { // relaxed mode
+			// HiNeuS adaptive Eikonal regularization
+			const float gamma = 5.0f;
+			const float error_clip_value = 0.2f;
+			
+			// Get ground truth color for this ray
+			Array3f gt_color = Array3f{ground_truth_colors[i*3], ground_truth_colors[i*3+1], ground_truth_colors[i*3+2]};
+			
+			// Compute rendering error for this ray
+			float ray_error = std::sqrt((rgb_ray.x() - gt_color.x()) * (rgb_ray.x() - gt_color.x()) + 
+									   (rgb_ray.y() - gt_color.y()) * (rgb_ray.y() - gt_color.y()) + 
+									   (rgb_ray.z() - gt_color.z()) * (rgb_ray.z() - gt_color.z()));
+			
+			// Clip error to prevent extreme weights
+			float ray_error_clipped = fminf(ray_error, error_clip_value);
+			
+			// Calculate adaptive weight: w(x) = exp(-γ * ||C(x) - C_gt(x)||²)
+			float adaptive_weight = __expf(-gamma * ray_error_clipped * ray_error_clipped);
+			
+			// Apply adaptive weight to Eikonal loss
+			eikonal_weight = ek_loss_weight * adaptive_weight;
+		}
 
-		// ek_loss
-		local_dL_doutput[4] = (tcnn::network_precision_t)(ek_loss_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[0]);
-		local_dL_doutput[5] = (tcnn::network_precision_t)(ek_loss_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[1]);
-		local_dL_doutput[6] = (tcnn::network_precision_t)(ek_loss_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[2]);
-		
+		// ek_loss (now with adaptive weighting)
+		local_dL_doutput[4] = (tcnn::network_precision_t)(eikonal_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[0]);
+		local_dL_doutput[5] = (tcnn::network_precision_t)(eikonal_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[1]);
+		local_dL_doutput[6] = (tcnn::network_precision_t)(eikonal_weight * 2 * original_loss_scale * pos_gradient_norm_inv * pos_gradient[2]);		
 		local_dL_doutput[7] = (tcnn::network_precision_t)(loss_scale * dloss_dvariance );
 
 		#if NORMAL_VECTORS_NORMALIZED
@@ -3967,9 +3992,9 @@ void Testbed::train_nerf_step(uint32_t target_batch_size, uint32_t n_rays_per_ba
 	(m_loss_mode == std::string("baseline") ? 0 : 
 	 m_loss_mode == std::string("surface") ? 1 : 
 	 m_loss_mode == std::string("hybrid") ? 2 : 
-	 m_loss_mode == std::string("dual") ? 3 : 0)	);
-
-
+	 m_loss_mode == std::string("dual") ? 3 : 0),
+	(m_eikonal_mode == std::string("baseline") ? 0 : 1),
+	nullptr	);
 	fill_rollover_and_rescale<network_precision_t><<<n_blocks_linear(target_batch_size*padded_output_width), n_threads_linear, 0, stream>>>(
 		target_batch_size, padded_output_width, compacted_counter, dloss_dmlp_out
 	);

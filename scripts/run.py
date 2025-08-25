@@ -64,7 +64,7 @@ def parse_args():
 	# Loss configuration
 	parser.add_argument("--loss_mode", choices=["baseline", "surface", "hybrid"], default="baseline", help="Loss computation mode: baseline volumetric loss, surface-weighted loss, or hybrid")
 	parser.add_argument("--occupancy_warmup_steps", type=int, default=1000, help="Number of warm-up steps for occupancy alpha clamping in surface/surface-head modes")
-
+	parser.add_argument("--eikonal_mode", choices=["baseline", "relaxed"], default="baseline", help="Eikonal loss mode. 'baseline' is uniform. 'relaxed' is the adaptive HiNeuS version.")
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images.")
 
 	## na_test
@@ -117,12 +117,12 @@ if __name__ == "__main__":
 		f.write(f"Scene: {scene_name}\n")
 		f.write(f"Configuration: {args.configuration}\n")
 		f.write(f"Method: {args.name}\n")
+		f.write(f"Eikonal Mode: {args.eikonal_mode}\n")
 		f.write(f"Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
 		f.write(f"Output Path: {args.output_path}\n")
 		f.write(f"Network Config: {args.network}\n")
 		f.write(f"Log Interval: {args.log_interval}\n")
 		f.write(f"="*50 + "\n\n")
-
 	mode = ngp.TestbedMode.Nerf 
 	configs_dir = os.path.join(ROOT_DIR, "configs", "nerf")
 
@@ -156,7 +156,8 @@ if __name__ == "__main__":
 		testbed.loss_mode = args.loss_mode
 	if hasattr(testbed, "occupancy_warmup_steps"):
 		testbed.occupancy_warmup_steps = int(args.occupancy_warmup_steps)
-
+	if hasattr(testbed, "eikonal_mode"):
+		testbed.eikonal_mode = args.eikonal_mode
 	# Handle rendering configuration
 	print(f"Using rendering configuration: {args.configuration}")
 	if args.configuration == "baseline":
@@ -175,6 +176,14 @@ if __name__ == "__main__":
 	else:
 		print(f"Using BASELINE configuration: 16D SDF output -> 16D RGB input (original NeuS2)")
 
+	# Handle Eikonal loss configuration
+	print(f"Using Eikonal loss mode: {args.eikonal_mode}")
+	if args.eikonal_mode == "relaxed":
+		print("HiNeuS adaptive Eikonal regularization enabled - Eikonal loss will be weighted by rendering error")
+		print("  - Low rendering error regions: Strong Eikonal constraint (smooth surfaces)")
+		print("  - High rendering error regions: Weak Eikonal constraint (preserve details)")
+	else:
+		print("Standard uniform Eikonal loss enabled")
 	if mode == ngp.TestbedMode.Sdf:
 		testbed.tonemap_curve = ngp.TonemapCurve.ACES
 
