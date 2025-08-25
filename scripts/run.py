@@ -61,6 +61,10 @@ def parse_args():
 	parser.add_argument("--log_interval", type=int, default=500, help="Interval for logging evaluation metrics during training.")
 	parser.add_argument("--configuration", choices=["baseline", "surface", "volume", "hybrid"], default="baseline", help="Rendering configuration: baseline (original), surface (SDF + surface features), volume (SDF + divergence features), or hybrid (SDF + surface + divergence features)")
 
+	# Loss configuration
+	parser.add_argument("--loss_mode", choices=["baseline", "surface"], default="baseline", help="Loss computation mode: baseline volumetric loss or surface-weighted loss")
+	parser.add_argument("--occupancy_warmup_steps", type=int, default=1000, help="Number of warm-up steps for occupancy alpha clamping in surface mode")
+
 	parser.add_argument("--sharpen", default=0, help="Set amount of sharpening applied to NeRF training images.")
 
 	## na_test
@@ -122,7 +126,7 @@ if __name__ == "__main__":
 	mode = ngp.TestbedMode.Nerf 
 	configs_dir = os.path.join(ROOT_DIR, "configs", "nerf")
 
-	base_network = os.path.join(configs_dir, "base.json")
+	base_network = os.path.join(configs_dir, "dtu.json")
 	network = args.network if args.network else base_network
 	if not os.path.isabs(network):
 		network = os.path.join(configs_dir, network)
@@ -146,6 +150,12 @@ if __name__ == "__main__":
 
 	testbed = ngp.Testbed(mode)
 	testbed.nerf.sharpen = float(args.sharpen)
+
+	# Propagate loss configuration to the testbed
+	if hasattr(testbed, "loss_mode"):
+		testbed.loss_mode = args.loss_mode
+	if hasattr(testbed, "occupancy_warmup_steps"):
+		testbed.occupancy_warmup_steps = int(args.occupancy_warmup_steps)
 
 	# Handle rendering configuration
 	print(f"Using rendering configuration: {args.configuration}")

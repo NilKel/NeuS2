@@ -448,6 +448,9 @@ PYBIND11_MODULE(pyngp, m) {
 		.def_property_readonly("ek_loss", [](py::object& obj) { return obj.cast<Testbed&>().m_ek_loss_scalar.val(); })
 		.def_property_readonly("mask_loss", [](py::object& obj) { return obj.cast<Testbed&>().m_mask_loss_scalar.val(); })
 		.def_readonly("training_step", &Testbed::m_training_step)
+		// Loss configuration exposure
+		.def_property("loss_mode", &Testbed::loss_mode, &Testbed::set_loss_mode)
+		.def_property("occupancy_warmup_steps", &Testbed::occupancy_warmup_steps, &Testbed::set_occupancy_warmup_steps)
 
 		//dynamic scene
 		.def_readonly("current_training_time_frame", &Testbed::current_training_time_frame)

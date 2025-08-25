@@ -1520,7 +1520,9 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 	Eigen::Vector3f first_frame_offset,
 	const float mask_loss_weight,
 	const float ek_loss_weight,
-	const float cos_anneal_ratio
+	const float cos_anneal_ratio,
+	bool surface_mode,
+	uint32_t occupancy_warmup_steps
 ) {
 	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
 	if (i >= *rays_counter) { return; }
@@ -1603,7 +1605,12 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 		float p = prev_cdf - next_cdf;
 		float c = prev_cdf;
 		float p_div_c = (p + 1e-5f) / (c + 1e-5f);
-		const float alpha = tcnn::clamp(p_div_c, 0.0f, 1.0f); // alpha = 1.f - sigmoid(next_sdf / s) / sigmoid(prev_sdf / s);
+		float alpha = tcnn::clamp(p_div_c, 0.0f, 1.0f); // alpha = 1.f - sigmoid(next_sdf / s) / sigmoid(prev_sdf / s);
+
+		if (surface_mode && training_step < occupancy_warmup_steps) {
+			float alpha_max = 0.1f + 0.9f * (float(training_step) / float(max(1u, occupancy_warmup_steps)));
+			alpha = fminf(alpha, alpha_max);
+		}
 
 		const float weight = alpha * T;
 		rgb_ray += weight * rgb;
@@ -1714,7 +1721,10 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 
 	float mean_loss = lg.loss.mean();
 	if (loss_output) {
-		loss_output[i] = mean_loss / (float)n_rays;
+		float out_loss = mean_loss;
+		// Surface-mode weighted L1 requires per-sample alpha, which is only available in the second pass below.
+		// So we defer surface-mode loss accumulation to the second pass and keep the first-pass output as mean loss here.
+		loss_output[i] = out_loss / (float)n_rays;
 	}
 
 	if (mask_loss_output) {
@@ -1763,6 +1773,9 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 	float depth_ray2 = 0.f;
 	T = 1.f;
 
+	// Accumulator for surface-mode weighted L1 (needs alpha from the second pass)
+	float surface_weighted_l1_accum = 0.0f;
+
 	prev_deformed_pos = ray_o;
 	for (uint32_t j = 0; j < compacted_numsteps; ++j) {
 		if (max_level_rand_training) {
@@ -1803,9 +1816,20 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 		float p = prev_cdf - next_cdf;
 		float c = prev_cdf;
 		float p_div_c = (p + 1e-5f) / (c + 1e-5f);
-		const float alpha = tcnn::clamp(p_div_c, 0.0f, 1.0f); // alpha = 1.f - sigmoid(next_sdf / s) / sigmoid(prev_sdf / s);
+		float alpha = tcnn::clamp(p_div_c, 0.0f, 1.0f); // alpha = 1.f - sigmoid(next_sdf / s) / sigmoid(prev_sdf / s);
+
+		if (surface_mode && training_step < occupancy_warmup_steps) {
+			float alpha_max = 0.1f + 0.9f * (float(training_step) / float(max(1u, occupancy_warmup_steps)));
+			alpha = fminf(alpha, alpha_max);
+		}
 
 		const float weight = alpha * T;
+		// Surface-mode: accumulate weighted local L1 loss per sample
+		if (surface_mode) {
+			Array3f diff_local = rgb - rgbtarget;
+			float local_l1 = (fabsf(diff_local.x()) + fabsf(diff_local.y()) + fabsf(diff_local.z())) / 3.0f;
+			surface_weighted_l1_accum += weight * local_l1;
+		}
 		rgb_ray2 += weight * rgb;
 		depth_ray2 += weight * depth;
 		weight_sum2 += weight;
@@ -1826,10 +1850,26 @@ __global__ void compute_loss_kernel_train_nerf_with_global_movement(
 		const float depth_suffix = depth_ray - depth_ray2;
 		const float depth_supervision = depth_loss_gradient * (T * depth - depth_suffix);
 
-		float dloss_dalpha =  (
-            lg.gradient.matrix().dot((T * rgb - suffix).matrix()) 
-            + gradient_weight_sum * (1 - weight_sum)  // add mask_loss
-			)/ (1.0f - alpha + 1e-5);
+		// If we have a per-ray loss_output buffer and are in surface mode, write the accumulated
+		// surface-weighted L1 loss normalized by the number of steps. Do this once at the end.
+		if (surface_mode && loss_output && j == compacted_numsteps - 1) {
+			float out_loss = surface_weighted_l1_accum / fmaxf(1.0f, (float)compacted_numsteps);
+			loss_output[i] = out_loss / (float)n_rays;
+		}
+
+		float dloss_dalpha;
+		if (surface_mode) {
+			// Keep baseline alpha gradient to maintain geometry updates
+			dloss_dalpha = (
+				lg.gradient.matrix().dot((T * rgb - suffix).matrix())
+				+ gradient_weight_sum * (1 - weight_sum)
+				)/ (1.0f - alpha + 1e-5);
+		} else {
+			dloss_dalpha = (
+				lg.gradient.matrix().dot((T * rgb - suffix).matrix())
+				+ gradient_weight_sum * (1 - weight_sum)
+				)/ (1.0f - alpha + 1e-5);
+		}
 		
 			
 		float dalpha_d_e_minus_sigmoidx;
@@ -3901,7 +3941,9 @@ void Testbed::train_nerf_step(uint32_t target_batch_size, uint32_t n_rays_per_ba
 		m_first_frame_offset,
 		m_mask_loss_weight,
 		m_ek_loss_weight,
-		m_nerf_network->cos_anneal_ratio()
+		m_nerf_network->cos_anneal_ratio(),
+	(m_loss_mode == std::string("surface")),
+	m_occupancy_warmup_steps
 	);
 
 
