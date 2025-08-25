@@ -1541,8 +1541,9 @@ __global__ void compute_surface_features_kernel(
             T normal_component = normal_vectors[normal_offset + j];
             surface_feature += phi_component * normal_component;
         }
-        // Apply negative sign and store
-        processed_features[output_offset + i] = -surface_feature;
+        		// Apply negative sign and ReLU, then store
+		T neg_surface = -surface_feature;
+		processed_features[output_offset + i] = neg_surface > (T)0 ? neg_surface : (T)0;
     }
 }
 
