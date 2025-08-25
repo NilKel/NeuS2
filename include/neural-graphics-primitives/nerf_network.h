@@ -49,6 +49,13 @@ __global__ void copy_processed_features(
     const T* input, T* output
 );
 
+template <typename T>
+__global__ void add_rgb_two_heads(const uint32_t n_elements,
+		const T* __restrict__ surf_out,
+		const T* __restrict__ vol_out,
+		T* __restrict__ rgb_out,
+		uint32_t out_stride);
+
 
 
 #define NERF_DEBUG_BACKWARD 0
@@ -79,7 +86,7 @@ public:
 		printf("m_density_network_input_width: %d", m_density_network_input_width);
 		local_density_network_config["n_input_dims"] = m_density_network_input_width;
 		if (!density_network.contains("n_output_dims")) {
-			if (m_configuration == "surface" || m_configuration == "volume" || m_configuration == "hybrid") {
+			if (m_configuration == "surface" || m_configuration == "volume" || m_configuration == "hybrid" || m_configuration == "dual") {
 				// Support for surface/volume/hybrid configuration: output 46D instead of 16D
 				// 1D for SDF + 15x3D for Spatially-Vectored Potential Φ
 				local_density_network_config["n_output_dims"] = 46;
@@ -90,7 +97,7 @@ public:
 		}
 		m_density_network.reset(tcnn::create_network<T>(local_density_network_config));
 
-				// density(feature), xyz, normal, dir
+		// density(feature), xyz, normal, dir
 		// All configurations use 16D input: 16D features + 1D SDF = 17D total
 		// Baseline: 16D density features
 		// Surface: 15D surface features (dot product with normals) + 1D SDF = 16D
@@ -99,7 +106,7 @@ public:
 		int feature_dims;
 		if (m_configuration == "baseline") {
 			feature_dims = 16;  // 16D density features
-		} else if (m_configuration == "surface" || m_configuration == "volume") {
+		} else if (m_configuration == "surface" || m_configuration == "volume" || m_configuration == "dual") {
 			feature_dims = 16;  // 15D processed features + 1D SDF = 16D
 		} else if (m_configuration == "hybrid") {
 			feature_dims = 31;  // 15D surface + 15D divergence + 1D SDF = 31D
@@ -115,12 +122,16 @@ public:
 		// Set output dimensions based on configuration
 		if (m_configuration == "hybrid") {
 			local_rgb_network_config["n_output_dims"] = 31;  // 15D surface + 15D divergence + 1D SDF
+			m_rgb_network.reset(tcnn::create_network<T>(local_rgb_network_config));
+		} else if (m_configuration == "dual") {
+			local_rgb_network_config["n_output_dims"] = 16;  // Each head outputs standard 16D features
+			m_rgb_surface.reset(tcnn::create_network<T>(local_rgb_network_config));
+			m_rgb_volume.reset(tcnn::create_network<T>(local_rgb_network_config));
 		} else {
 			local_rgb_network_config["n_output_dims"] = 16;  // Default for baseline, surface, volume
+			m_rgb_network.reset(tcnn::create_network<T>(local_rgb_network_config));
 		}
 		
-		m_rgb_network.reset(tcnn::create_network<T>(local_rgb_network_config));
-
 
 		m_delta_network = std::make_shared<DeltaNetwork<T>>(m_pos_encoding->input_width() + m_dir_encoding->input_width());
 
@@ -1444,6 +1455,9 @@ public:
 private:
 	std::unique_ptr<tcnn::Network<T>> m_density_network;
 	std::unique_ptr<tcnn::Network<T>> m_rgb_network;
+	// Dual-head RGB networks
+	std::unique_ptr<tcnn::Network<T>> m_rgb_surface;
+	std::unique_ptr<tcnn::Network<T>> m_rgb_volume;
 	std::shared_ptr<tcnn::Encoding<T>> m_pos_encoding;
 	std::shared_ptr<tcnn::Encoding<T>> m_dir_encoding;
 
@@ -1484,6 +1498,10 @@ private:
 		std::unique_ptr<Context> rgb_network_ctx;
 		std::unique_ptr<Context> variance_network_ctx;
 		std::unique_ptr<Context> delta_network_ctx;
+
+		// Dual-head per-head feature inputs (16 x N)
+		tcnn::GPUMatrixDynamic<T> surface_head_input;
+		tcnn::GPUMatrixDynamic<T> volume_head_input;
 	};
 };
 
@@ -1573,6 +1591,22 @@ __global__ void copy_processed_features(
     output[idx] = input[idx];
 }
 
-
+template <typename T>
+__global__ void add_rgb_two_heads(const uint32_t n_elements,
+		const T* __restrict__ surf_out,
+		const T* __restrict__ vol_out,
+		T* __restrict__ rgb_out,
+		uint32_t out_stride) {
+	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n_elements) return;
+	// Sum first 3 channels from both heads into output (AoS or SoA via stride)
+	for (int c = 0; c < 3; ++c) {
+		rgb_out[c * out_stride + i] = surf_out[c * out_stride + i] + vol_out[c * out_stride + i];
+	}
+	// Copy remaining channels from volume head (optional)
+	for (int c = 3; c < 16; ++c) {
+		rgb_out[c * out_stride + i] = vol_out[c * out_stride + i];
+	}
+}
 
 NGP_NAMESPACE_END

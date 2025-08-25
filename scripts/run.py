@@ -59,7 +59,7 @@ def parse_args():
 	parser.add_argument("--train", action="store_true", help="If the GUI is enabled, controls whether training starts immediately.")
 	parser.add_argument("--n_steps", type=int, default=-1, help="Number of steps to train for before quitting.")
 	parser.add_argument("--log_interval", type=int, default=500, help="Interval for logging evaluation metrics during training.")
-	parser.add_argument("--configuration", choices=["baseline", "surface", "volume", "hybrid"], default="baseline", help="Rendering configuration: baseline (original), surface (SDF + surface features), volume (SDF + divergence features), or hybrid (SDF + surface + divergence features)")
+	parser.add_argument("--configuration", choices=["baseline", "surface", "volume", "hybrid", "dual"], default="baseline", help="Rendering configuration: baseline (original), surface (SDF + surface features), volume (SDF + divergence features), hybrid (SDF + surface + divergence features), or dual (two RGB heads: surface + volume)")
 
 	# Loss configuration
 	parser.add_argument("--loss_mode", choices=["baseline", "surface", "hybrid"], default="baseline", help="Loss computation mode: baseline volumetric loss, surface-weighted loss, or hybrid")
