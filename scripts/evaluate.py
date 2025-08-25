@@ -58,7 +58,7 @@ def main():
         
         # Look for config and method in checkpoint path
         for i, part in enumerate(checkpoint_parts):
-            if part in ['baseline', 'surface', 'volume']:
+            if part in ['baseline', 'surface', 'volume', 'hybrid']:
                 config_name = part
                 if i + 1 < len(checkpoint_parts):
                     method_name = checkpoint_parts[i + 1]
